@@ -1,0 +1,196 @@
+diff --git a/config/mk/google_devices/platform/laguna/BoardConfig-common.mk b/config/mk/google_devices/platform/laguna/BoardConfig-common.mk
+index 8b7b82eb8..dbe311f89 100644
+--- a/config/mk/google_devices/platform/laguna/BoardConfig-common.mk
++++ b/config/mk/google_devices/platform/laguna/BoardConfig-common.mk
+@@ -12,3 +12,5 @@ BOARD_PERSISTIMAGE_FILE_SYSTEM_TYPE := f2fs
+ 
+ SYSTEM_EXT_PUBLIC_SEPOLICY_DIRS += vendor/adevtool/config/mk/google_devices/platform/laguna/sepolicy/system_ext/public
+ SYSTEM_EXT_PRIVATE_SEPOLICY_DIRS += vendor/adevtool/config/mk/google_devices/platform/laguna/sepolicy/system_ext/private
++
++BOARD_VENDOR_SEPOLICY_DIRS += vendor/adevtool/config/mk/google_devices/platform/laguna/sepolicy/vendor
+diff --git a/config/mk/google_devices/platform/laguna/device.mk b/config/mk/google_devices/platform/laguna/device.mk
+index ed5eeb96f..0a1be09db 100644
+--- a/config/mk/google_devices/platform/laguna/device.mk
++++ b/config/mk/google_devices/platform/laguna/device.mk
+@@ -16,3 +16,5 @@ PRODUCT_CHECK_VENDOR_SEAPP_VIOLATIONS := true
+ PRODUCT_CHECK_DEV_TYPE_VIOLATIONS := true
+ 
+ PRODUCT_NO_BIONIC_PAGE_SIZE_MACRO := true
++
++PRODUCT_PACKAGES += gos-charge-limit
+diff --git a/config/mk/google_devices/platform/laguna/gos-charge-limit/Android.bp b/config/mk/google_devices/platform/laguna/gos-charge-limit/Android.bp
+new file mode 100644
+index 000000000..c9e111d3e
+--- /dev/null
++++ b/config/mk/google_devices/platform/laguna/gos-charge-limit/Android.bp
+@@ -0,0 +1,7 @@
++rust_binary {
++    name: "gos-charge-limit",
++    srcs: ["src/main.rs"],
++    vendor: true,
++    init_rc: ["gos-charge-limit.rc"],
++    edition: "2021",
++}
+diff --git a/config/mk/google_devices/platform/laguna/gos-charge-limit/gos-charge-limit.rc b/config/mk/google_devices/platform/laguna/gos-charge-limit/gos-charge-limit.rc
+new file mode 100644
+index 000000000..138a8dfe4
+--- /dev/null
++++ b/config/mk/google_devices/platform/laguna/gos-charge-limit/gos-charge-limit.rc
+@@ -0,0 +1,9 @@
++on property:sota.charge.limit=*
++    start vendor.gos-charge-limit
++
++service vendor.gos-charge-limit /vendor/bin/gos-charge-limit ${sota.charge.limit}
++    class main
++    user system
++    group system
++    disabled
++    oneshot
+diff --git a/config/mk/google_devices/platform/laguna/gos-charge-limit/src/main.rs b/config/mk/google_devices/platform/laguna/gos-charge-limit/src/main.rs
+new file mode 100644
+index 000000000..3e14ad869
+--- /dev/null
++++ b/config/mk/google_devices/platform/laguna/gos-charge-limit/src/main.rs
+@@ -0,0 +1,116 @@
++use std::fs;
++use std::io;
++use std::process::ExitCode;
++
++const MIN_LEVEL: i32 = 50;
++const MAX_LEVEL: i32 = 80;
++const HYSTERESIS: i32 = 3;
++
++const START_PATH: &str =
++    "/sys/devices/platform/google,charger/charge_start_level";
++const STOP_PATH: &str =
++    "/sys/devices/platform/google,charger/charge_stop_level";
++
++fn read_level(path: &str) -> io::Result<i32> {
++    let value = fs::read_to_string(path)?;
++    value
++        .trim()
++        .parse::<i32>()
++        .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
++}
++
++fn write_level(path: &str, value: i32) -> io::Result<()> {
++    fs::write(path, value.to_string())
++}
++
++fn apply_limit(target_stop: i32) -> io::Result<()> {
++    if !(MIN_LEVEL..=MAX_LEVEL).contains(&target_stop) {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidInput,
++            format!("charge limit must be between {MIN_LEVEL} and {MAX_LEVEL}"),
++        ));
++    }
++
++    let target_start = target_stop - HYSTERESIS;
++
++    let current_start = read_level(START_PATH)?;
++    let current_stop = read_level(STOP_PATH)?;
++
++    if current_start >= current_stop {
++        return Err(io::Error::new(
++            io::ErrorKind::InvalidData,
++            format!(
++                "invalid current charge levels: start={current_start}, stop={current_stop}"
++            ),
++        ));
++    }
++
++    // The kernel rejects writing the value already present in either node
++    // with EINVAL, so never perform a same-value write.
++    if current_start == target_start && current_stop == target_stop {
++        return Ok(());
++    }
++
++    if current_start == target_start {
++        write_level(STOP_PATH, target_stop)?;
++        return Ok(());
++    }
++
++    if current_stop == target_stop {
++        write_level(START_PATH, target_start)?;
++        return Ok(());
++    }
++
++    // Lowering the target below the current start requires lowering start
++    // first. Raising the target above the current stop requires raising stop
++    // first. For overlapping ranges, choose the order based on direction.
++    if target_stop <= current_start {
++        write_level(START_PATH, target_start)?;
++        write_level(STOP_PATH, target_stop)?;
++    } else if target_start >= current_stop {
++        write_level(STOP_PATH, target_stop)?;
++        write_level(START_PATH, target_start)?;
++    } else if target_stop < current_stop {
++        write_level(START_PATH, target_start)?;
++        write_level(STOP_PATH, target_stop)?;
++    } else {
++        write_level(STOP_PATH, target_stop)?;
++        write_level(START_PATH, target_start)?;
++    }
++
++    Ok(())
++}
++
++fn main() -> ExitCode {
++    let mut args = std::env::args();
++    let program = args
++        .next()
++        .unwrap_or_else(|| "gos-charge-limit".to_string());
++
++    let limit = match (args.next(), args.next()) {
++        (Some(value), None) => match value.parse::<i32>() {
++            Ok(value) => value,
++            Err(err) => {
++                eprintln!("invalid charge limit: {err}");
++                return ExitCode::from(2);
++            }
++        },
++        _ => {
++            eprintln!("usage: {program} LIMIT");
++            return ExitCode::from(2);
++        }
++    };
++
++    if let Err(err) = apply_limit(limit) {
++        eprintln!("failed to apply charge limit {limit}: {err}");
++        return ExitCode::FAILURE;
++    }
++
++    println!(
++        "set charge levels to {}/{}",
++        limit - HYSTERESIS,
++        limit
++    );
++
++    ExitCode::SUCCESS
++}
+diff --git a/config/mk/google_devices/platform/laguna/sepolicy/vendor/file_contexts b/config/mk/google_devices/platform/laguna/sepolicy/vendor/file_contexts
+new file mode 100644
+index 000000000..8c034dc46
+--- /dev/null
++++ b/config/mk/google_devices/platform/laguna/sepolicy/vendor/file_contexts
+@@ -0,0 +1 @@
++/vendor/bin/gos-charge-limit u:object_r:gos_charge_limit_exec:s0
+diff --git a/config/mk/google_devices/platform/laguna/sepolicy/vendor/gos_charge_limit.te b/config/mk/google_devices/platform/laguna/sepolicy/vendor/gos_charge_limit.te
+new file mode 100644
+index 000000000..8c1725eda
+--- /dev/null
++++ b/config/mk/google_devices/platform/laguna/sepolicy/vendor/gos_charge_limit.te
+@@ -0,0 +1,13 @@
++type gos_charge_limit, domain;
++type gos_charge_limit_exec, exec_type, vendor_file_type, file_type;
++
++init_daemon_domain(gos_charge_limit)
++
++allow gos_charge_limit sysfs_batteryinfo:dir search;
++
++allow gos_charge_limit sysfs_batteryinfo:file {
++    open
++    read
++    write
++    getattr
++};

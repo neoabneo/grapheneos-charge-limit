@@ -1,0 +1,375 @@
+diff --git a/res/layout/preference_charge_limit_switch.xml b/res/layout/preference_charge_limit_switch.xml
+new file mode 100644
+index 0000000..8aee32e
+--- /dev/null
++++ b/res/layout/preference_charge_limit_switch.xml
+@@ -0,0 +1,44 @@
++<?xml version="1.0" encoding="utf-8"?>
++<LinearLayout
++    xmlns:android="http://schemas.android.com/apk/res/android"
++    android:layout_width="match_parent"
++    android:layout_height="wrap_content"
++    android:minHeight="?android:attr/listPreferredItemHeightSmall"
++    android:gravity="center_vertical"
++    android:orientation="horizontal"
++    android:paddingStart="?android:attr/listPreferredItemPaddingStart"
++    android:paddingEnd="?android:attr/listPreferredItemPaddingEnd">
++
++    <TextView
++        android:id="@android:id/title"
++        android:layout_width="wrap_content"
++        android:layout_height="wrap_content"
++        android:singleLine="true"
++        android:textAppearance="?android:attr/textAppearanceListItem"
++        android:textColor="@color/materialColorOnSurface" />
++
++    <SeekBar
++        android:id="@+id/charge_limit_seekbar"
++        android:layout_width="0dp"
++        android:layout_height="48dp"
++        android:layout_weight="1"
++        android:layout_marginStart="12dp"
++        android:layout_marginEnd="8dp" />
++
++    <TextView
++        android:id="@+id/charge_limit_value"
++        android:layout_width="48dp"
++        android:layout_height="wrap_content"
++        android:gravity="center"
++        android:singleLine="true"
++        android:textAppearance="?android:attr/textAppearanceListItemSmall"
++        android:textColor="@color/materialColorOnSurface" />
++
++    <LinearLayout
++        android:id="@android:id/widget_frame"
++        android:layout_width="wrap_content"
++        android:layout_height="match_parent"
++        android:gravity="center_vertical"
++        android:orientation="vertical" />
++
++</LinearLayout>
+diff --git a/res/values/strings_ext.xml b/res/values/strings_ext.xml
+index 0ac5bf5..bc86a7f 100644
+--- a/res/values/strings_ext.xml
++++ b/res/values/strings_ext.xml
+@@ -371,4 +371,5 @@ For compatibility, this app can still see clipboard metadata, such as whether an
+     <string name="app_clipboard_read_shared_uid_warning">"The clipboard access setting, blocked access message setting, and temporary Paste access are shared among these apps:
+ %1$s"</string>
+ 
++    <string name="battery_charge_limit_switch_title">Limit to</string>
+ </resources>
+diff --git a/src/com/android/settings/ext/BoolSettingFragment.java b/src/com/android/settings/ext/BoolSettingFragment.java
+index e342faa..4e9d829 100644
+--- a/src/com/android/settings/ext/BoolSettingFragment.java
++++ b/src/com/android/settings/ext/BoolSettingFragment.java
+@@ -34,7 +34,7 @@ public abstract class BoolSettingFragment extends DashboardFragment implements E
+ 
+         PreferenceScreen screen = getPreferenceManager().createPreferenceScreen(ctx);
+ 
+-        var mainSwitch = new SwitchPreferenceCompat(ctx);
++        var mainSwitch = createMainSwitch(ctx);
+         mainSwitch.setTitle(getMainSwitchTitle());
+ 
+         this.mainSwitch = mainSwitch;
+@@ -77,6 +77,10 @@ public abstract class BoolSettingFragment extends DashboardFragment implements E
+ 
+     protected abstract CharSequence getTitle();
+ 
++    protected SwitchPreferenceCompat createMainSwitch(Context context) {
++        return new SwitchPreferenceCompat(context);
++    }
++
+     protected CharSequence getMainSwitchTitle() {
+         return getText(R.string.bool_setting_enable);
+     }
+diff --git a/src/com/android/settings/fuelgauge/BatteryChargingOptimizationFragment.java b/src/com/android/settings/fuelgauge/BatteryChargingOptimizationFragment.java
+index cfc7bc2..bd5fb19 100644
+--- a/src/com/android/settings/fuelgauge/BatteryChargingOptimizationFragment.java
++++ b/src/com/android/settings/fuelgauge/BatteryChargingOptimizationFragment.java
+@@ -1,11 +1,13 @@
+ package com.android.settings.fuelgauge;
+ 
++import android.content.Context;
+ import android.ext.power.BatteryChargeLimit;
+ import android.ext.settings.BoolSetting;
+-import android.icu.text.NumberFormat;
+ import android.os.RemoteException;
+ import android.util.Log;
+ 
++import androidx.preference.SwitchPreferenceCompat;
++
+ import com.android.settings.R;
+ import com.android.settings.ext.BoolSettingFragment;
+ import com.android.settingslib.widget.FooterPreference;
+@@ -14,15 +16,18 @@ import com.google.android.settings.fuelgauge.GoogleBattery;
+ import vendor.google.google_battery.IGoogleBattery;
+ 
+ public class BatteryChargingOptimizationFragment extends BoolSettingFragment {
++
+     private static final String TAG = "BatteryChargingOptimizationFragment";
+ 
++    private ChargeLimitSwitchPreference chargeLimitPreference;
++
+     @Override
+     protected boolean interceptMainSwitchChange(boolean newValue) {
+-        int policy = newValue ?
+-                IGoogleBattery.BatteryChargingPolicy.LONGLIFE :
+-                IGoogleBattery.BatteryChargingPolicy.DEFAULT;
++        int policy = newValue
++                ? IGoogleBattery.BatteryChargingPolicy.LONGLIFE
++                : IGoogleBattery.BatteryChargingPolicy.DEFAULT;
+ 
+-        // block setting update if policy update fails
++        // Block setting update if policy update fails.
+         return !setChargingPolicy(policy);
+     }
+ 
+@@ -31,6 +36,7 @@ public class BatteryChargingOptimizationFragment extends BoolSettingFragment {
+         if (service == null) {
+             return false;
+         }
++
+         try {
+             service.setChargingPolicy(policy);
+             Log.d(TAG, "setChargingPolicy to " + policy);
+@@ -51,32 +57,55 @@ public class BatteryChargingOptimizationFragment extends BoolSettingFragment {
+         return getText(R.string.charging_optimization_title);
+     }
+ 
++    @Override
++    protected SwitchPreferenceCompat createMainSwitch(Context context) {
++        ChargeLimitSwitchPreference preference =
++                new ChargeLimitSwitchPreference(context);
++
++        preference.setRange(
++                BatteryChargeLimit.MIN_LEVEL,
++                BatteryChargeLimit.MAX_LEVEL);
++
++        preference.setLevel(
++                BatteryChargeLimit.getChargeLimit(context));
++
++        preference.setOnChargeLimitChangeListener(newLevel ->
++                BatteryChargeLimit.getLevelSetting().put(
++                        requireContext(), newLevel));
++
++        chargeLimitPreference = preference;
++        return preference;
++    }
++
+     @Override
+     protected CharSequence getMainSwitchTitle() {
+-        return requireContext().getString(
+-                R.string.charging_optimization_entry_summary_charge_limit,
+-                NumberFormat.getPercentInstance().format(BatteryChargeLimit.CHARGE_LEVEL / 100f));
++        return getText(R.string.battery_charge_limit_switch_title);
+     }
+ 
+     @Override
+     protected void onMainSwitchChanged(boolean state) {
+-        footer.setVisible(getSetting().get(requireContext()));
++        if (chargeLimitPreference != null) {
++            chargeLimitPreference.setChargeLimitEnabled(state);
++        }
+     }
+ 
+-    private FooterPreference footer;
++    @Override
++    public void onResume() {
++        super.onResume();
++
++        if (chargeLimitPreference != null) {
++            chargeLimitPreference.setLevel(
++                    BatteryChargeLimit.getChargeLimit(requireContext()));
++            chargeLimitPreference.setChargeLimitEnabled(
++                    getSetting().get(requireContext()));
++        }
++    }
+ 
+     @Override
+     protected FooterPreference makeFooterPref(FooterPreference.Builder builder) {
+-        String text = requireContext().getString(
+-                R.string.charging_optimization_footer_message_charging_limit,
+-                NumberFormat.getPercentInstance().format(BatteryChargeLimit.CHARGE_LEVEL / 100f),
+-                NumberFormat.getPercentInstance().format(1f));
+-
+-        builder.setTitle(text);
++        builder.setTitle(requireContext().getString(
++                R.string.charging_optimization_footer_message_charging_limit));
+ 
+-        FooterPreference pref = builder.build();
+-        pref.setVisible(getSetting().get(requireContext()));
+-        this.footer = pref;
+-        return pref;
++        return builder.build();
+     }
+ }
+diff --git a/src/com/android/settings/fuelgauge/BatteryChargingOptimizationPrefController.java b/src/com/android/settings/fuelgauge/BatteryChargingOptimizationPrefController.java
+index eade15a..e089d89 100644
+--- a/src/com/android/settings/fuelgauge/BatteryChargingOptimizationPrefController.java
++++ b/src/com/android/settings/fuelgauge/BatteryChargingOptimizationPrefController.java
+@@ -17,8 +17,10 @@ public class BatteryChargingOptimizationPrefController extends BoolSettingFragme
+ 
+     @Override
+     protected CharSequence getSummaryOn() {
+-        return mContext.getString(R.string.charging_optimization_entry_summary_charge_limit,
+-                        NumberFormat.getPercentInstance().format(BatteryChargeLimit.CHARGE_LEVEL / 100f));
++        return mContext.getString(
++                R.string.charging_optimization_entry_summary_charge_limit,
++                NumberFormat.getPercentInstance().format(
++                        BatteryChargeLimit.getChargeLimit(mContext) / 100f));
+     }
+ 
+     @Override
+diff --git a/src/com/android/settings/fuelgauge/ChargeLimitSwitchPreference.java b/src/com/android/settings/fuelgauge/ChargeLimitSwitchPreference.java
+new file mode 100644
+index 0000000..ad42655
+--- /dev/null
++++ b/src/com/android/settings/fuelgauge/ChargeLimitSwitchPreference.java
+@@ -0,0 +1,125 @@
++package com.android.settings.fuelgauge;
++
++import android.content.Context;
++import android.icu.text.NumberFormat;
++import android.widget.SeekBar;
++import android.widget.TextView;
++
++import androidx.preference.PreferenceViewHolder;
++import androidx.preference.SwitchPreferenceCompat;
++
++import com.android.settings.R;
++
++public class ChargeLimitSwitchPreference extends SwitchPreferenceCompat
++        implements SeekBar.OnSeekBarChangeListener {
++
++    public interface OnChargeLimitChangeListener {
++        boolean onChargeLimitChange(int level);
++    }
++
++    private int mMin;
++    private int mMax;
++    private int mLevel;
++
++    private SeekBar mSeekBar;
++    private TextView mValueView;
++
++    private OnChargeLimitChangeListener mChargeLimitChangeListener;
++
++    public ChargeLimitSwitchPreference(Context context) {
++        super(context);
++        setLayoutResource(R.layout.preference_charge_limit_switch);
++        setWidgetLayoutResource(R.layout.preference_widget_switch_compat);
++    }
++
++    public void setRange(int min, int max) {
++        mMin = min;
++        mMax = max;
++
++        if (mSeekBar != null) {
++            mSeekBar.setMin(min);
++            mSeekBar.setMax(max);
++        }
++    }
++
++    public void setLevel(int level) {
++        mLevel = level;
++
++        if (mSeekBar != null && mSeekBar.getProgress() != level) {
++            mSeekBar.setProgress(level);
++        }
++
++        updateValueText(level);
++    }
++
++    public int getLevel() {
++        return mLevel;
++    }
++
++    public void setOnChargeLimitChangeListener(OnChargeLimitChangeListener listener) {
++        mChargeLimitChangeListener = listener;
++    }
++
++    @Override
++    public void onBindViewHolder(PreferenceViewHolder holder) {
++        super.onBindViewHolder(holder);
++
++        mSeekBar = (SeekBar) holder.findViewById(R.id.charge_limit_seekbar);
++        mValueView = (TextView) holder.findViewById(R.id.charge_limit_value);
++
++        mSeekBar.setMin(mMin);
++        mSeekBar.setMax(mMax);
++        mSeekBar.setProgress(mLevel);
++        mSeekBar.setOnSeekBarChangeListener(this);
++
++        updateValueText(mLevel);
++        setChargeLimitEnabled(isChecked());
++    }
++
++    public void setChargeLimitEnabled(boolean enabled) {
++        if (mSeekBar != null) {
++            mSeekBar.setEnabled(enabled);
++        }
++
++        if (mValueView != null) {
++            mValueView.setEnabled(enabled);
++        }
++    }
++
++    @Override
++    public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
++        if (fromUser) {
++            updateValueText(progress);
++        }
++    }
++
++    @Override
++    public void onStartTrackingTouch(SeekBar seekBar) {}
++
++    @Override
++    public void onStopTrackingTouch(SeekBar seekBar) {
++        final int newLevel = seekBar.getProgress();
++
++        if (newLevel == mLevel) {
++            updateValueText(mLevel);
++            return;
++        }
++
++        if (mChargeLimitChangeListener != null
++                && !mChargeLimitChangeListener.onChargeLimitChange(newLevel)) {
++            seekBar.setProgress(mLevel);
++            updateValueText(mLevel);
++            return;
++        }
++
++        mLevel = newLevel;
++        updateValueText(mLevel);
++    }
++
++    private void updateValueText(int level) {
++        if (mValueView != null) {
++            mValueView.setText(
++                    NumberFormat.getPercentInstance().format(level / 100f));
++        }
++    }
++}
+diff --git a/src/com/google/android/settings/fuelgauge/BatterySettingsFeatureProviderGoogleImpl.java b/src/com/google/android/settings/fuelgauge/BatterySettingsFeatureProviderGoogleImpl.java
+index bd92fde..d452205 100644
+--- a/src/com/google/android/settings/fuelgauge/BatterySettingsFeatureProviderGoogleImpl.java
++++ b/src/com/google/android/settings/fuelgauge/BatterySettingsFeatureProviderGoogleImpl.java
+@@ -33,7 +33,7 @@ public class BatterySettingsFeatureProviderGoogleImpl extends BatterySettingsFea
+             int pluggedStatus,
+             long chargeRemainingTimeMs,
+             long currentTimeMs) {
+-        if (batteryLevel >= BatteryChargeLimit.CHARGE_LEVEL) {
++        if (batteryLevel >= BatteryChargeLimit.getChargeLimit(context)) {
+             return context.getString(R.string.charging_optimization_reach_limit_remaining_time_label);
+         }
+         if (chargeRemainingTimeMs <= 0) {
+@@ -53,7 +53,7 @@ public class BatterySettingsFeatureProviderGoogleImpl extends BatterySettingsFea
+             String batteryPercentageString,
+             long chargeRemainingTimeMs,
+             long currentTimeMs) {
+-        if (batteryLevel >= BatteryChargeLimit.CHARGE_LEVEL) {
++        if (batteryLevel >= BatteryChargeLimit.getChargeLimit(context)) {
+             return context.getString(R.string.charging_optimization_reach_limit_charge_label,
+                     batteryPercentageString);
+         }

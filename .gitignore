@@ -1,0 +1,17 @@
+# Local scratch / temporary verification work
+.work/
+tmp/
+/tmp/
+
+# Build outputs (never publish)
+out/
+*.log
+*.tar.gz
+*.zip
+*.img
+*.bin
+
+# Editor / OS noise
+*.swp
+*~
+.DS_Store

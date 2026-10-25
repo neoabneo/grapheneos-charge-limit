@@ -1,0 +1,22 @@
+diff --git a/private/property_contexts b/private/property_contexts
+index 3839fa0..3b1660a 100644
+--- a/private/property_contexts
++++ b/private/property_contexts
+@@ -1970,3 +1970,6 @@ service.aiseal. u:object_r:aiseal_prop:s0
+ 
+ # Wear dynamic thermal profile property
+ thermal.dynamic_config_profile    u:object_r:thermal_profile_prop:s0 exact enum default setup kids_setup kids
++
++# Battery charge limit used by Google device charging helper.
++sota.charge.limit u:object_r:sota_prop:s0 exact int
+diff --git a/private/system_server.te b/private/system_server.te
+index 1e2dd95..1b1ce36 100644
+--- a/private/system_server.te
++++ b/private/system_server.te
+@@ -1921,3 +1921,6 @@ set_prop(system_server, thermal_profile_prop)
+ # wrapfd device node and the wrapfds.
+ neverallowxperm system_server wrapfd_device:chr_file ioctl ~{ WRAPFD_DEV_IOC_WRAP };
+ neverallowxperm system_server system_server_wrapfd:anon_inode ioctl ~{ dma_buf_ioctls wrapfd_ioctls };
++
++# Set the charge stop level consumed by vendor init.
++set_prop(system_server, sota_prop)
